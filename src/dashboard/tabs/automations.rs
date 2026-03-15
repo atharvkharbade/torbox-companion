@@ -66,7 +66,6 @@ struct CreateRuleRequest {
     trigger_config: serde_json::Value,
     conditions: Vec<serde_json::Value>,
     action_config: serde_json::Value,
-    download_category: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -388,7 +387,8 @@ pub fn AutomationsTab() -> impl IntoView {
 
                                 let action_config = serde_json::json!({
                                     "action_type": action_type_val,
-                                    "params": serde_json::Value::Null
+                                    "params": serde_json::Value::Null,
+                                    "download_category": "Torrent"
                                 });
 
                                 let request = CreateRuleRequest {
@@ -397,7 +397,6 @@ pub fn AutomationsTab() -> impl IntoView {
                                     trigger_config,
                                     conditions,
                                     action_config,
-                                    download_category: "Torrent".to_string(),
                                 };
 
                                 let url = "/api/automation/rules";
@@ -1330,12 +1329,19 @@ fn RuleModal(
                             action_type.set(at.to_string());
                         }
                     }
-                    // Load download_category from rule
-                    if let Ok(cat) = serde_json::from_value::<String>(rule.download_category.clone()) {
-                        download_category.set(cat);
-                    } else {
-                        download_category.set("Torrent".to_string());
-                    }
+                    // Load download_category from rule's action_config
+                    let cat_str = if let Some(obj) = rule.action_config.as_object() {
+                        if let Some(cat) = obj.get("download_category") {
+                            if cat.is_string() {
+                                cat.as_str().unwrap_or("Torrent").to_string()
+                            } else if let Some(cat_obj) = cat.as_object() {
+                                cat_obj.keys().next().map(|k| k.clone()).unwrap_or_else(|| "Torrent".to_string())
+                            } else {
+                                "Torrent".to_string()
+                            }
+                        } else { "Torrent".to_string() }
+                    } else { "Torrent".to_string() };
+                    download_category.set(cat_str);
                 }
             } else if let Some((name, minutes, cond_type, cond_op, cond_val, act_type)) = preset_data.get() {
                 // Apply preset values
@@ -1913,7 +1919,8 @@ fn RuleModal(
 
                                                             let action_config = serde_json::json!({
                                                                 "action_type": action_type_clone.get(),
-                                                                "params": serde_json::Value::Null
+                                                                "params": serde_json::Value::Null,
+                                                                "download_category": download_category_save.get()
                                                             });
 
                                                             let request = CreateRuleRequest {
@@ -1922,7 +1929,6 @@ fn RuleModal(
                                                                 trigger_config,
                                                                 conditions,
                                                                 action_config,
-                                                                download_category: download_category_save.get(),
                                                             };
 
                                                             let url = if editing_rule_id_clone.get().is_some() {
