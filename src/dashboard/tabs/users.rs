@@ -123,39 +123,33 @@ pub fn UsersTab() -> impl IntoView {
                             let mut total_bytes: i64 = 0;
 
                             // Fetch torrents
-                            if let Ok(resp) = client.get_torrent_list(None, Some(true), None, Some(9999)).await {
-                                if let Some(torrents) = resp.data {
-                                    for t in &torrents {
-                                        if let Ok(created) = chrono::DateTime::parse_from_rfc3339(&t.created_at) {
-                                            if created.timestamp() >= cycle_start_ts && t.size > 0 {
-                                                total_bytes += t.size;
-                                            }
+                            if let Ok(torrents) = client.get_all_torrents(true).await {
+                                for t in &torrents {
+                                    if let Ok(created) = chrono::DateTime::parse_from_rfc3339(&t.created_at) {
+                                        if created.timestamp() >= cycle_start_ts && t.size > 0 {
+                                            total_bytes += t.size;
                                         }
                                     }
                                 }
                             }
 
                             // Fetch web downloads
-                            if let Ok(resp) = client.get_web_download_list(None, Some(true), None, Some(9999)).await {
-                                if let Some(webdls) = resp.data {
-                                    for w in &webdls {
-                                        if let Ok(created) = chrono::DateTime::parse_from_rfc3339(&w.created_at) {
-                                            if created.timestamp() >= cycle_start_ts && w.size > 0 {
-                                                total_bytes += w.size;
-                                            }
+                            if let Ok(webdls) = client.get_all_web_downloads(true).await {
+                                for w in &webdls {
+                                    if let Ok(created) = chrono::DateTime::parse_from_rfc3339(&w.created_at) {
+                                        if created.timestamp() >= cycle_start_ts && w.size > 0 {
+                                            total_bytes += w.size;
                                         }
                                     }
                                 }
                             }
 
                             // Fetch usenet downloads
-                            if let Ok(resp) = client.get_usenet_download_list(None, Some(true), None, Some(9999)).await {
-                                if let Some(usnets) = resp.data {
-                                    for u in &usnets {
-                                        if let Ok(created) = chrono::DateTime::parse_from_rfc3339(&u.created_at) {
-                                            if created.timestamp() >= cycle_start_ts && u.size > 0 {
-                                                total_bytes += u.size;
-                                            }
+                            if let Ok(usnets) = client.get_all_usenet_downloads(true).await {
+                                for u in &usnets {
+                                    if let Ok(created) = chrono::DateTime::parse_from_rfc3339(&u.created_at) {
+                                        if created.timestamp() >= cycle_start_ts && u.size > 0 {
+                                            total_bytes += u.size;
                                         }
                                     }
                                 }
