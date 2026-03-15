@@ -489,6 +489,19 @@ impl From<UsenetDownload> for DownloadItem {
         );
         
         let mut status_lower_final = final_status.to_lowercase();
+
+        // Handle new usenet processing states added in TorBox v8.3
+        // These are active processing states, not failures
+        if status_lower_final == "verifying" 
+            || status_lower_final == "unpacking"
+            || status_lower_final == "repairing" {
+            // Keep as-is — these are valid in-progress states
+        } else if status_lower_final == "failed_repair" 
+            || status_lower_final == "failed_unpack"
+            || status_lower_final == "failed_verification" {
+            final_status = "inactive".to_string();
+            status_lower_final = final_status.to_lowercase();
+        }
         
         if (status_lower_final.contains("uploading") || status_lower_final.contains("seeding")) 
             && !usenet.active 
@@ -1697,12 +1710,17 @@ pub fn DownloadsTable(
                     return true;
                 }
                 
+                // verifying/unpacking/repairing are active usenet processing states
+                if filter_status == "downloading" && (normalized_lower == "verifying" || normalized_lower == "unpacking" || normalized_lower == "repairing") {
+                    return true;
+                }
+                
                 if filter_status == "cached" && (normalized_lower == "cached" || normalized_lower == "completed") {
                     return true;
                 }
                 
                 if filter_status == "inactive" {
-                    if normalized_lower == "paused" || normalized_lower == "stalled" || normalized_lower == "failed" || normalized_lower == "inactive" || normalized_lower == "unknown" || normalized_lower == "expired" {
+                    if normalized_lower == "paused" || normalized_lower == "stalled" || normalized_lower == "failed" || normalized_lower == "inactive" || normalized_lower == "unknown" || normalized_lower == "expired" || normalized_lower == "failed_repair" || normalized_lower == "failed_unpack" || normalized_lower == "failed_verification" {
                         return true;
                     }
                     if normalized_lower != "completed" && normalized_lower != "cached" && normalized_lower != "downloading" && normalized_lower != "seeding" && normalized_lower != "queued" {
@@ -1870,19 +1888,15 @@ pub fn DownloadsTable(
                                         DownloadType::WebDownload => "/api/webdl/download",
                                         DownloadType::Usenet => "/api/usenet/download",
                                     };
-                                    
+
+                                    // When file_id is None (top-level download button), 
+                                    // use zip_link=true to download all files as a zip batch.
+                                    // Only fall back to individual file IDs when a specific file is clicked.
+                                    let use_zip = file_id.is_none();
+
                                     let file_ids_to_download: Vec<i32> = if file_id.is_none() {
-                                        let downloads_list = downloads_ref.get_untracked();
-                                        if let Some(download) = downloads_list.iter().find(|d| d.id == id) {
-                                            let media_files = get_media_files(&download.files);
-                                            if !media_files.is_empty() {
-                                                media_files.iter().map(|f| f.id).collect()
-                                            } else {
-                                                Vec::new()
-                                            }
-                                        } else {
-                                            Vec::new()
-                                        }
+                                        // zip_link=true handles the whole batch — no file_id needed
+                                        vec![-1] // sentinel: will build URL without file_id
                                     } else {
                                         vec![file_id.unwrap()]
                                     };
@@ -1906,7 +1920,12 @@ pub fn DownloadsTable(
                                                     url.push_str(&format!("usenet_id={}", id));
                                                 }
                                             }
-                                            url.push_str(&format!("&file_id={}", fid));
+                                            if use_zip {
+                                                // Request the whole batch as a zip
+                                                url.push_str("&zip_link=true");
+                                            } else {
+                                                url.push_str(&format!("&file_id={}", fid));
+                                            }
                                             
                                             match client
                                                 .get(&url)
@@ -3198,6 +3217,55 @@ pub fn DownloadsTable(
         }
     };
 
+    let handle_redownload = {
+        let notifications_clone = notifications.clone();
+        let fetch_downloads_clone = fetch_downloads.clone();
+        move |id: i32, download_type: DownloadType| {
+            #[cfg(target_arch = "wasm32")]
+            {
+                let notifications_local = notifications_clone.clone();
+                let fetch_downloads_local = fetch_downloads_clone.clone();
+                spawn_local(async move {
+                    if let Some(window) = web_sys::window() {
+                        if let Ok(Some(storage)) = window.local_storage() {
+                            if let Ok(Some(api_key)) = storage.get_item("api_key") {
+                                if !api_key.is_empty() {
+                                    let client = TorboxClient::new(api_key);
+                                    let result = match download_type {
+                                        DownloadType::Torrent => {
+                                            client.control_torrent("redownload".to_string(), id, false).await
+                                                .map(|_| ())
+                                                .map_err(|e| format_api_error(&e))
+                                        }
+                                        DownloadType::WebDownload => {
+                                            client.control_web_download("redownload".to_string(), id, false).await
+                                                .map(|_| ())
+                                                .map_err(|e| format_api_error(&e))
+                                        }
+                                        DownloadType::Usenet => {
+                                            client.control_usenet_download("redownload".to_string(), id, false).await
+                                                .map(|_| ())
+                                                .map_err(|e| format_api_error(&e))
+                                        }
+                                    };
+                                    match result {
+                                        Ok(_) => {
+                                            notifications_local.success("Re-download started successfully".to_string());
+                                            fetch_downloads_local();
+                                        }
+                                        Err(e) => {
+                                            notifications_local.error(format!("Failed to re-download: {}", e));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+        }
+    };
+
     let handle_cloud_upload = move |id: i32, download_type: DownloadType, provider: String| {
         #[cfg(target_arch = "wasm32")]
         {
@@ -3301,6 +3369,13 @@ pub fn DownloadsTable(
             "stalled" | "stalled (no seeds)" | "checking" => true,
             _ => false,
         }
+    };
+
+    let is_redownload_enabled = move |status: &str| -> bool {
+        let s = status.to_lowercase();
+        s == "inactive" || s == "failed" || s == "expired"
+            || s.contains("error") || s.contains("failed")
+            || s == "reported missing" || s == "missingfiles"
     };
 
     let is_cloud_upload_enabled = move |status: &str| -> bool {
@@ -3843,6 +3918,7 @@ pub fn DownloadsTable(
                 {let handle_download_clone = handle_download.clone();
                 let handle_stream_clone = handle_stream.clone();
                 let handle_reannounce_clone = handle_reannounce.clone();
+                let handle_redownload_clone = handle_redownload.clone();
                 let handle_cloud_upload_clone = handle_cloud_upload.clone();
                 let handle_stop_resume_clone = handle_stop_resume.clone();
                 let handle_delete_clone = handle_delete.clone();
@@ -4007,6 +4083,7 @@ pub fn DownloadsTable(
                                         let handle_download_for_row = handle_download_clone.clone();
                                         let handle_stream_for_row = handle_stream_clone.clone();
                                         let handle_reannounce_for_row = handle_reannounce_clone.clone();
+                                        let handle_redownload_for_row = handle_redownload_clone.clone();
                                         let handle_stop_resume_for_row = handle_stop_resume_clone.clone();
                                         let handle_delete_for_row = handle_delete_clone.clone();
                                         let handle_cloud_upload_for_row = handle_cloud_upload_clone.clone();
@@ -4546,6 +4623,29 @@ pub fn DownloadsTable(
                                                                         >
                                                                             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="color: var(--accent-warning);">
                                                                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                                                                            </svg>
+                                                                        </button>
+                                                                    </Show>
+                                                                }
+                                                            }
+
+                                                            {
+                                                                let redownload_status = download.status.clone();
+                                                                let redownload_id = download.id;
+                                                                let redownload_type = download.download_type;
+                                                                view! {
+                                                                    <Show when=move || is_redownload_enabled(&redownload_status)>
+                                                                        <button
+                                                                            class="p-2 rounded transition-colors flex items-center justify-center"
+                                                                            style="background-color: transparent;"
+                                                                            on:click={
+                                                                                let handle_redownload_local = handle_redownload_for_row.clone();
+                                                                                move |_| handle_redownload_local(redownload_id, redownload_type)
+                                                                            }
+                                                                            title="Re-download (restart failed/expired download)"
+                                                                        >
+                                                                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="color: var(--accent-primary);">
+                                                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path>
                                                                             </svg>
                                                                         </button>
                                                                     </Show>
