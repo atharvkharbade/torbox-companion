@@ -1,5 +1,13 @@
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub enum DownloadCategory {
+    #[default]
+    Torrent,
+    WebDownload,
+    Usenet,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AutomationRule {
     pub id: Option<i64>,
@@ -9,6 +17,8 @@ pub struct AutomationRule {
     pub trigger_config: TriggerConfig,
     pub conditions: Vec<Condition>,
     pub action_config: ActionConfig,
+    #[serde(default)]
+    pub download_category: DownloadCategory,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
 }
@@ -28,32 +38,34 @@ pub struct Condition {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ConditionType {
+    // Torrent-specific
     SeedingTime,
     SeedingRatio,
     StalledTime,
+    Seeds,
+    Peers,
+    TotalUploaded,
+    LongTermSeeding,
+    SeedTorrent,
+    HasMagnet,
+    AllowZipped,
+    TorrentFile,
+    // Shared
     Age,
     DownloadSpeed,
     UploadSpeed,
     FileSize,
     Progress,
-    Seeds,
-    Peers,
-    TotalUploaded,
     TotalDownloaded,
     DownloadState,
     Inactive,
     DownloadFinished,
     Cached,
     Private,
-    LongTermSeeding,
-    SeedTorrent,
     ETA,
     Availability,
     ExpiresAt,
     DownloadPresent,
-    TorrentFile,
-    AllowZipped,
-    HasMagnet,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -73,10 +85,12 @@ pub struct ActionConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ActionType {
-    StopSeeding,
+    // All types
     Delete,
     Stop,
     Resume,
+    // Torrent-only
+    StopSeeding,
     Restart,
     Reannounce,
     ForceStart,
