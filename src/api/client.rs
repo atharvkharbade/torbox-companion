@@ -1204,4 +1204,50 @@ impl TorboxClient {
         let response = self.request(reqwest::Method::POST, url, Some(&body)).await?;
         Self::handle_response(response).await
     }
+
+    // Paginated fetch helpers — fetches ALL items regardless of count
+    pub async fn get_all_torrents(&self, bypass_cache: bool) -> Result<Vec<crate::api::types::Torrent>, ApiError> {
+        const PAGE_SIZE: i32 = 1000;
+        let mut all = Vec::new();
+        let mut offset = 0;
+        loop {
+            let resp = self.get_torrent_list(None, Some(bypass_cache), Some(offset), Some(PAGE_SIZE)).await?;
+            let page = resp.data.unwrap_or_default();
+            let done = page.len() < PAGE_SIZE as usize;
+            all.extend(page);
+            if done { break; }
+            offset += PAGE_SIZE;
+        }
+        Ok(all)
+    }
+
+    pub async fn get_all_web_downloads(&self, bypass_cache: bool) -> Result<Vec<crate::api::types::WebDownload>, ApiError> {
+        const PAGE_SIZE: i32 = 1000;
+        let mut all = Vec::new();
+        let mut offset = 0;
+        loop {
+            let resp = self.get_web_download_list(None, Some(bypass_cache), Some(offset), Some(PAGE_SIZE)).await?;
+            let page = resp.data.unwrap_or_default();
+            let done = page.len() < PAGE_SIZE as usize;
+            all.extend(page);
+            if done { break; }
+            offset += PAGE_SIZE;
+        }
+        Ok(all)
+    }
+
+    pub async fn get_all_usenet_downloads(&self, bypass_cache: bool) -> Result<Vec<crate::api::types::UsenetDownload>, ApiError> {
+        const PAGE_SIZE: i32 = 1000;
+        let mut all = Vec::new();
+        let mut offset = 0;
+        loop {
+            let resp = self.get_usenet_download_list(None, Some(bypass_cache), Some(offset), Some(PAGE_SIZE)).await?;
+            let page = resp.data.unwrap_or_default();
+            let done = page.len() < PAGE_SIZE as usize;
+            all.extend(page);
+            if done { break; }
+            offset += PAGE_SIZE;
+        }
+        Ok(all)
+    }
 }
