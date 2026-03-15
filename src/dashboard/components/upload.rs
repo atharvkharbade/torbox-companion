@@ -230,7 +230,7 @@ pub fn UploadComponent() -> impl IntoView {
                                                 add_only_if_cached: Some(add_only_if_cached_val),
                                             };
                                             
-                                            match client.async_create_torrent(request).await {
+                                            match client.create_torrent(request).await {
                                                 Ok(_) => {
                                                     processed += 1;
                                                     progress_signal.set(processed);
