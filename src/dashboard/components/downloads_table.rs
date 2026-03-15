@@ -1094,9 +1094,9 @@ pub fn DownloadsTable(
                                 let mut all_downloads = Vec::new();
                                 let mut api_errors = Vec::new();
                                 
-                                let torrents_future = client.get_torrent_list(None, Some(true), None, Some(9999));
-                                let web_downloads_future = client.get_web_download_list(None, Some(true), None, Some(9999));
-                                let usenet_future = client.get_usenet_download_list(None, Some(true), None, Some(9999));
+                                let torrents_future = client.get_all_torrents(true);
+                                let web_downloads_future = client.get_all_web_downloads(true);
+                                let usenet_future = client.get_all_usenet_downloads(true);
 
                                 let queued_torrents_future = client.get_queued_downloads(Some("torrent".to_string()), None, Some(false), None, None);
                                 let queued_usenet_future = client.get_queued_downloads(Some("usenet".to_string()), None, Some(false), None, None);
@@ -1115,15 +1115,13 @@ pub fn DownloadsTable(
                                 let mut total_processed = 0;
                                 
                                 match torrents_result {
-                                    Ok(response) => {
-                                        if let Some(data) = response.data {
-                                            for torrent in data {
-                                                all_downloads.push(DownloadItem::from(torrent));
-                                                total_processed += 1;
-                                                
-                                                if total_processed % PROCESSING_YIELD == 0 {
-                                                    yield_to_browser().await;
-                                                }
+                                    Ok(data) => {
+                                        for torrent in data {
+                                            all_downloads.push(DownloadItem::from(torrent));
+                                            total_processed += 1;
+                                            
+                                            if total_processed % PROCESSING_YIELD == 0 {
+                                                yield_to_browser().await;
                                             }
                                         }
                                     }
@@ -1136,15 +1134,13 @@ pub fn DownloadsTable(
                                 yield_to_browser().await;
                                 
                                 match web_result {
-                                    Ok(response) => {
-                                        if let Some(data) = response.data {
-                                            for web_dl in data {
-                                                all_downloads.push(DownloadItem::from(web_dl));
-                                                total_processed += 1;
-                                                
-                                                if total_processed % PROCESSING_YIELD == 0 {
-                                                    yield_to_browser().await;
-                                                }
+                                    Ok(data) => {
+                                        for web_dl in data {
+                                            all_downloads.push(DownloadItem::from(web_dl));
+                                            total_processed += 1;
+                                            
+                                            if total_processed % PROCESSING_YIELD == 0 {
+                                                yield_to_browser().await;
                                             }
                                         }
                                     }
@@ -1158,15 +1154,13 @@ pub fn DownloadsTable(
                                 yield_to_browser().await;
                                 
                                 match usenet_result {
-                                    Ok(response) => {
-                                        if let Some(data) = response.data {
-                                            for usenet in data {
-                                                all_downloads.push(DownloadItem::from(usenet));
-                                                total_processed += 1;
-                                                
-                                                if total_processed % PROCESSING_YIELD == 0 {
-                                                    yield_to_browser().await;
-                                                }
+                                    Ok(data) => {
+                                        for usenet in data {
+                                            all_downloads.push(DownloadItem::from(usenet));
+                                            total_processed += 1;
+                                            
+                                            if total_processed % PROCESSING_YIELD == 0 {
+                                                yield_to_browser().await;
                                             }
                                         }
                                     }
@@ -1398,9 +1392,9 @@ pub fn DownloadsTable(
                                 let api_key_clone = api_key.clone();
                                 let client = TorboxClient::new(api_key_clone);
                                 
-                                let torrents_future = client.get_torrent_list(None, Some(true), None, Some(9999));
-                                let web_downloads_future = client.get_web_download_list(None, Some(true), None, Some(9999));
-                                let usenet_future = client.get_usenet_download_list(None, Some(true), None, Some(9999));
+                                let torrents_future = client.get_all_torrents(true);
+                                let web_downloads_future = client.get_all_web_downloads(true);
+                                let usenet_future = client.get_all_usenet_downloads(true);
 
                                 let queued_torrents_future = client.get_queued_downloads(Some("torrent".to_string()), None, Some(false), None, None);
                                 let queued_usenet_future = client.get_queued_downloads(Some("usenet".to_string()), None, Some(false), None, None);
@@ -1423,50 +1417,44 @@ pub fn DownloadsTable(
                                     
                                     let mut seen_ids: std::collections::HashSet<(i32, DownloadType)> = std::collections::HashSet::new();
                                 
-                                    if let Ok(response) = torrents_result {
-                                        if let Some(data) = response.data {
-                                            for torrent in data {
-                                                let item = DownloadItem::from(torrent);
-                                                let key = (item.id, item.download_type.clone());
-                                                seen_ids.insert(key.clone());
-                                                
-                                                if let Some(&idx) = current_map.get(&key) {
-                                                    downloads[idx] = item;
-                                                } else {
-                                                    downloads.push(item);
-                                                }
+                                    if let Ok(data) = torrents_result {
+                                        for torrent in data {
+                                            let item = DownloadItem::from(torrent);
+                                            let key = (item.id, item.download_type.clone());
+                                            seen_ids.insert(key.clone());
+                                            
+                                            if let Some(&idx) = current_map.get(&key) {
+                                                downloads[idx] = item;
+                                            } else {
+                                                downloads.push(item);
                                             }
                                         }
                                     }
                                     
-                                    if let Ok(response) = web_result {
-                                        if let Some(data) = response.data {
-                                            for web_dl in data {
-                                                let item = DownloadItem::from(web_dl);
-                                                let key = (item.id, item.download_type.clone());
-                                                seen_ids.insert(key.clone());
-                                                
-                                                if let Some(&idx) = current_map.get(&key) {
-                                                    downloads[idx] = item;
-                                                } else {
-                                                    downloads.push(item);
-                                                }
+                                    if let Ok(data) = web_result {
+                                        for web_dl in data {
+                                            let item = DownloadItem::from(web_dl);
+                                            let key = (item.id, item.download_type.clone());
+                                            seen_ids.insert(key.clone());
+                                            
+                                            if let Some(&idx) = current_map.get(&key) {
+                                                downloads[idx] = item;
+                                            } else {
+                                                downloads.push(item);
                                             }
                                         }
                                     }
                                     
-                                    if let Ok(response) = usenet_result {
-                                        if let Some(data) = response.data {
-                                            for usenet in data {
-                                                let item = DownloadItem::from(usenet);
-                                                let key = (item.id, item.download_type.clone());
-                                                seen_ids.insert(key.clone());
-                                                
-                                                if let Some(&idx) = current_map.get(&key) {
-                                                    downloads[idx] = item;
-                                                } else {
-                                                    downloads.push(item);
-                                                }
+                                    if let Ok(data) = usenet_result {
+                                        for usenet in data {
+                                            let item = DownloadItem::from(usenet);
+                                            let key = (item.id, item.download_type.clone());
+                                            seen_ids.insert(key.clone());
+                                            
+                                            if let Some(&idx) = current_map.get(&key) {
+                                                downloads[idx] = item;
+                                            } else {
+                                                downloads.push(item);
                                             }
                                         }
                                     }
