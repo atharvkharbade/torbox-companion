@@ -17,10 +17,15 @@ pub struct AutomationRule {
     pub trigger_config: TriggerConfig,
     pub conditions: Vec<Condition>,
     pub action_config: ActionConfig,
-    #[serde(default)]
-    pub download_category: DownloadCategory,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
+}
+
+// Helper: extract download category from an AutomationRule's action_config
+impl AutomationRule {
+    pub fn download_category(&self) -> DownloadCategory {
+        self.action_config.download_category.clone().unwrap_or_default()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -81,6 +86,9 @@ pub enum Operator {
 pub struct ActionConfig {
     pub action_type: ActionType,
     pub params: Option<serde_json::Value>,
+    // Stored in action_config JSON — no DB migration needed
+    #[serde(default)]
+    pub download_category: Option<DownloadCategory>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
