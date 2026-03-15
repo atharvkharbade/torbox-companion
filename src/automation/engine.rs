@@ -8,574 +8,294 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub struct AutomationEngine;
 
 impl AutomationEngine {
-    pub fn new() -> Self {
-        Self
-    }
+    pub fn new() -> Self { Self }
 
-    pub async fn execute_rule(
-        &self,
-        rule: &AutomationRule,
-        api_key: &str,
-    ) -> Result<ExecutionResult, String> {
+    pub async fn execute_rule(&self, rule: &AutomationRule, api_key: &str) -> Result<ExecutionResult, String> {
         let client = TorboxClient::new(api_key.to_string());
-
-        match rule.download_category {
+        match rule.download_category() {
             DownloadCategory::Torrent => self.execute_torrent_rule(rule, &client).await,
             DownloadCategory::WebDownload => self.execute_webdl_rule(rule, &client).await,
             DownloadCategory::Usenet => self.execute_usenet_rule(rule, &client).await,
         }
     }
 
-    // ── Torrent ──────────────────────────────────────────────────────────────
-
-    async fn execute_torrent_rule(
-        &self,
-        rule: &AutomationRule,
-        client: &TorboxClient,
-    ) -> Result<ExecutionResult, String> {
+    async fn execute_torrent_rule(&self, rule: &AutomationRule, client: &TorboxClient) -> Result<ExecutionResult, String> {
         log!("Fetching torrent list for rule: {}", rule.name);
-        let items = self.fetch_torrents_with_retry(client, &rule.name, 3).await?;
-        log!("Fetched {} torrents for rule: {}", items.len(), rule.name);
-
-        let matching: Vec<&Torrent> = items.iter()
-            .filter(|t| self.evaluate_torrent_conditions(rule, t))
+        let items = self.fetch_with_retry(|| client.get_torrent_list(None, Some(true), None, None), &rule.name, "torrents").await?;
+        let matching: Vec<(i32, String)> = items.iter()
+            .filter(|t| self.eval_torrent_conditions(rule, t))
+            .map(|t| (t.id, t.name.clone()))
             .collect();
-
-        self.process_items(
-            rule,
-            matching.len() as i32,
-            matching.into_iter().map(|t| (t.id, t.name.clone())).collect(),
-            |id| {
-                let client = client.clone();
-                let action = rule.action_config.action_type.clone();
-                async move { execute_torrent_action(&action, &client, id).await }
-            },
-        ).await
+        log!("Rule '{}' matched {} torrents", rule.name, matching.len());
+        self.process(rule, matching, |id| {
+            let c = client.clone(); let a = rule.action_config.action_type.clone();
+            async move { exec_torrent_action(&a, &c, id).await }
+        }).await
     }
 
-    async fn fetch_torrents_with_retry(
-        &self,
-        client: &TorboxClient,
-        rule_name: &str,
-        max_retries: u32,
-    ) -> Result<Vec<Torrent>, String> {
-        let mut last_error = None;
-        for attempt in 1..=max_retries {
-            match client.get_torrent_list(None, Some(true), None, None).await {
-                Ok(response) => {
-                    if let Some(data) = response.data {
-                        return Ok(data);
-                    } else {
-                        return Err("No torrent data returned".to_string());
-                    }
-                }
-                Err(e) => {
-                    let error_str = e.to_string();
-                    let is_transient = error_str.contains("530")
-                        || error_str.contains("504")
-                        || error_str.contains("502")
-                        || error_str.contains("503")
-                        || error_str.contains("Network error");
-                    last_error = Some(error_str.clone());
-                    if is_transient && attempt < max_retries {
-                        tokio::time::sleep(tokio::time::Duration::from_secs(attempt as u64)).await;
-                    } else if !is_transient {
-                        return Err(format!("Failed to fetch torrents: {}", error_str));
-                    }
-                }
-            }
-        }
-        Err(format!("Failed to fetch torrents after {} attempts: {}", max_retries,
-            last_error.unwrap_or_else(|| "Unknown error".to_string())))
-    }
-
-    // ── Web Downloads ─────────────────────────────────────────────────────────
-
-    async fn execute_webdl_rule(
-        &self,
-        rule: &AutomationRule,
-        client: &TorboxClient,
-    ) -> Result<ExecutionResult, String> {
+    async fn execute_webdl_rule(&self, rule: &AutomationRule, client: &TorboxClient) -> Result<ExecutionResult, String> {
         log!("Fetching web download list for rule: {}", rule.name);
-        let items = self.fetch_webdl_with_retry(client, &rule.name, 3).await?;
-        log!("Fetched {} web downloads for rule: {}", items.len(), rule.name);
-
-        let matching: Vec<&WebDownload> = items.iter()
-            .filter(|w| self.evaluate_webdl_conditions(rule, w))
+        let items = self.fetch_with_retry(|| client.get_web_download_list(None, Some(true), None, None), &rule.name, "web downloads").await?;
+        let matching: Vec<(i32, String)> = items.iter()
+            .filter(|w| self.eval_webdl_conditions(rule, w))
+            .map(|w| (w.id, w.name.clone()))
             .collect();
-
-        self.process_items(
-            rule,
-            matching.len() as i32,
-            matching.into_iter().map(|w| (w.id, w.name.clone())).collect(),
-            |id| {
-                let client = client.clone();
-                let action = rule.action_config.action_type.clone();
-                async move { execute_webdl_action(&action, &client, id).await }
-            },
-        ).await
+        log!("Rule '{}' matched {} web downloads", rule.name, matching.len());
+        self.process(rule, matching, |id| {
+            let c = client.clone(); let a = rule.action_config.action_type.clone();
+            async move { exec_webdl_action(&a, &c, id).await }
+        }).await
     }
 
-    async fn fetch_webdl_with_retry(
-        &self,
-        client: &TorboxClient,
-        rule_name: &str,
-        max_retries: u32,
-    ) -> Result<Vec<WebDownload>, String> {
-        let mut last_error = None;
-        for attempt in 1..=max_retries {
-            match client.get_web_download_list(None, Some(true), None, None).await {
-                Ok(response) => {
-                    if let Some(data) = response.data {
-                        return Ok(data);
-                    } else {
-                        return Err("No web download data returned".to_string());
-                    }
-                }
+    async fn execute_usenet_rule(&self, rule: &AutomationRule, client: &TorboxClient) -> Result<ExecutionResult, String> {
+        log!("Fetching usenet list for rule: {}", rule.name);
+        let items = self.fetch_with_retry(|| client.get_usenet_download_list(None, Some(true), None, None), &rule.name, "usenet").await?;
+        let matching: Vec<(i32, String)> = items.iter()
+            .filter(|u| self.eval_usenet_conditions(rule, u))
+            .map(|u| (u.id, u.name.clone()))
+            .collect();
+        log!("Rule '{}' matched {} usenet downloads", rule.name, matching.len());
+        self.process(rule, matching, |id| {
+            let c = client.clone(); let a = rule.action_config.action_type.clone();
+            async move { exec_usenet_action(&a, &c, id).await }
+        }).await
+    }
+
+    async fn fetch_with_retry<T, F, Fut>(&self, f: F, rule_name: &str, kind: &str) -> Result<Vec<T>, String>
+    where
+        F: Fn() -> Fut,
+        Fut: std::future::Future<Output = Result<crate::api::types::ApiResponse<Vec<T>>, crate::api::ApiError>>,
+    {
+        for attempt in 1u32..=3 {
+            match f().await {
+                Ok(r) => return r.data.ok_or_else(|| format!("No {} data returned", kind)),
                 Err(e) => {
-                    let error_str = e.to_string();
-                    let is_transient = error_str.contains("530")
-                        || error_str.contains("504")
-                        || error_str.contains("502")
-                        || error_str.contains("503")
-                        || error_str.contains("Network error");
-                    last_error = Some(error_str.clone());
-                    if is_transient && attempt < max_retries {
+                    let s = e.to_string();
+                    let transient = s.contains("530") || s.contains("504") || s.contains("502") || s.contains("503") || s.contains("Network error");
+                    if transient && attempt < 3 {
+                        log!("Transient error for rule '{}', retry {}/3: {}", rule_name, attempt, s);
                         tokio::time::sleep(tokio::time::Duration::from_secs(attempt as u64)).await;
-                    } else if !is_transient {
-                        return Err(format!("Failed to fetch web downloads: {}", error_str));
+                    } else {
+                        return Err(format!("Failed to fetch {}: {}", kind, s));
                     }
                 }
             }
         }
-        Err(format!("Failed to fetch web downloads after {} attempts: {}", max_retries,
-            last_error.unwrap_or_else(|| "Unknown error".to_string())))
+        Err(format!("Failed to fetch {} after 3 attempts", kind))
     }
 
-    // ── Usenet ────────────────────────────────────────────────────────────────
-
-    async fn execute_usenet_rule(
-        &self,
-        rule: &AutomationRule,
-        client: &TorboxClient,
-    ) -> Result<ExecutionResult, String> {
-        log!("Fetching usenet download list for rule: {}", rule.name);
-        let items = self.fetch_usenet_with_retry(client, &rule.name, 3).await?;
-        log!("Fetched {} usenet downloads for rule: {}", items.len(), rule.name);
-
-        let matching: Vec<&UsenetDownload> = items.iter()
-            .filter(|u| self.evaluate_usenet_conditions(rule, u))
-            .collect();
-
-        self.process_items(
-            rule,
-            matching.len() as i32,
-            matching.into_iter().map(|u| (u.id, u.name.clone())).collect(),
-            |id| {
-                let client = client.clone();
-                let action = rule.action_config.action_type.clone();
-                async move { execute_usenet_action(&action, &client, id).await }
-            },
-        ).await
-    }
-
-    async fn fetch_usenet_with_retry(
-        &self,
-        client: &TorboxClient,
-        rule_name: &str,
-        max_retries: u32,
-    ) -> Result<Vec<UsenetDownload>, String> {
-        let mut last_error = None;
-        for attempt in 1..=max_retries {
-            match client.get_usenet_download_list(None, Some(true), None, None).await {
-                Ok(response) => {
-                    if let Some(data) = response.data {
-                        return Ok(data);
-                    } else {
-                        return Err("No usenet data returned".to_string());
-                    }
-                }
-                Err(e) => {
-                    let error_str = e.to_string();
-                    let is_transient = error_str.contains("530")
-                        || error_str.contains("504")
-                        || error_str.contains("502")
-                        || error_str.contains("503")
-                        || error_str.contains("Network error");
-                    last_error = Some(error_str.clone());
-                    if is_transient && attempt < max_retries {
-                        tokio::time::sleep(tokio::time::Duration::from_secs(attempt as u64)).await;
-                    } else if !is_transient {
-                        return Err(format!("Failed to fetch usenet downloads: {}", error_str));
-                    }
-                }
-            }
-        }
-        Err(format!("Failed to fetch usenet downloads after {} attempts: {}", max_retries,
-            last_error.unwrap_or_else(|| "Unknown error".to_string())))
-    }
-
-    // ── Shared processor ─────────────────────────────────────────────────────
-
-    async fn process_items<F, Fut>(
-        &self,
-        rule: &AutomationRule,
-        total_items: i32,
-        items: Vec<(i32, String)>,
-        action_fn: F,
-    ) -> Result<ExecutionResult, String>
+    async fn process<F, Fut>(&self, rule: &AutomationRule, items: Vec<(i32, String)>, action_fn: F) -> Result<ExecutionResult, String>
     where
         F: Fn(i32) -> Fut,
         Fut: std::future::Future<Output = Result<(), String>>,
     {
+        let total = items.len() as i32;
         if items.is_empty() {
-            return Ok(ExecutionResult {
-                items_processed: 0,
-                total_items: 0,
-                success: true,
-                error_message: None,
-                processed_items: Some(Vec::new()),
-                partial: false,
-            });
+            return Ok(ExecutionResult { items_processed: 0, total_items: 0, success: true, error_message: None, processed_items: Some(vec![]), partial: false });
         }
-
         let action_name = match rule.action_config.action_type {
-            ActionType::StopSeeding => "Stop Seeding",
-            ActionType::Delete => "Delete",
-            ActionType::Stop => "Stop",
-            ActionType::Resume => "Resume",
-            ActionType::Restart => "Restart",
-            ActionType::Reannounce => "Reannounce",
+            ActionType::StopSeeding => "Stop Seeding", ActionType::Delete => "Delete",
+            ActionType::Stop => "Stop", ActionType::Resume => "Resume",
+            ActionType::Restart => "Restart", ActionType::Reannounce => "Reannounce",
             ActionType::ForceStart => "Force Start",
         }.to_string();
 
         let mut error_count = 0;
-        let mut errors: Vec<String> = Vec::new();
-        let mut processed_items: Vec<ProcessedItem> = Vec::new();
-        let per_item_timeout = tokio::time::Duration::from_secs(10);
+        let mut errors: Vec<String> = vec![];
+        let mut processed: Vec<ProcessedItem> = vec![];
+        let timeout = tokio::time::Duration::from_secs(10);
 
-        for (idx, (id, name)) in items.iter().enumerate() {
-            if idx > 0 && idx % 10 == 0 {
-                log!("Processed {}/{} items for rule '{}'", idx, items.len(), rule.name);
-            }
-
-            let result = match tokio::time::timeout(per_item_timeout, action_fn(*id)).await {
+        for (id, name) in &items {
+            let result = match tokio::time::timeout(timeout, action_fn(*id)).await {
                 Ok(Ok(())) => Ok(()),
-                Ok(Err(e)) => {
-                    if e.contains("429") || e.contains("Rate limit") {
-                        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-                        action_fn(*id).await
-                    } else {
-                        Err(e)
-                    }
+                Ok(Err(e)) if e.contains("429") || e.contains("Rate limit") => {
+                    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                    action_fn(*id).await
                 }
+                Ok(Err(e)) => Err(e),
                 Err(_) => Err("Action timed out after 10 seconds".to_string()),
             };
-
-            let success = result.is_ok();
-            let error = result.as_ref().err().map(|e| e.to_string());
-
-            processed_items.push(ProcessedItem {
-                id: *id,
-                name: name.clone(),
-                action: action_name.clone(),
-                success,
-                error: error.clone(),
-            });
-
-            if let Err(e) = result {
-                error_count += 1;
-                if errors.len() < 10 {
-                    errors.push(e);
-                }
-            }
+            let ok = result.is_ok();
+            let err = result.err();
+            if err.is_some() { error_count += 1; if errors.len() < 10 { errors.push(err.clone().unwrap()); } }
+            processed.push(ProcessedItem { id: *id, name: name.clone(), action: action_name.clone(), success: ok, error: err });
         }
 
-        let items_processed = processed_items.len() as i32;
-        let partial = items_processed < total_items;
-
+        let done = processed.len() as i32;
+        let partial = done < total;
         Ok(ExecutionResult {
-            items_processed,
-            total_items,
+            items_processed: done, total_items: total,
             success: error_count == 0 && !partial,
             error_message: if error_count > 0 || partial {
-                let mut parts = Vec::new();
-                if partial {
-                    parts.push(format!("Only processed {}/{} items", items_processed, total_items));
-                }
-                if error_count > 0 {
-                    parts.push(format!("{} of {} actions failed. {}",
-                        error_count, items_processed, errors.join("; ")));
-                }
+                let mut parts = vec![];
+                if partial { parts.push(format!("Only processed {}/{} items", done, total)); }
+                if error_count > 0 { parts.push(format!("{} of {} actions failed. {}", error_count, done, errors.join("; "))); }
                 Some(parts.join(". "))
-            } else {
-                None
-            },
-            processed_items: Some(processed_items),
+            } else { None },
+            processed_items: Some(processed),
             partial,
         })
     }
 
-    // ── Condition evaluators ──────────────────────────────────────────────────
-
-    fn evaluate_torrent_conditions(&self, rule: &AutomationRule, item: &Torrent) -> bool {
-        rule.conditions.iter().all(|c| self.evaluate_torrent_condition(c, item))
+    fn eval_torrent_conditions(&self, rule: &AutomationRule, item: &Torrent) -> bool {
+        rule.conditions.iter().all(|c| eval_torrent(c, item))
     }
-
-    fn evaluate_torrent_condition(&self, condition: &Condition, item: &Torrent) -> bool {
-        let now = now_secs();
-
-        let val: Option<f64> = match condition.r#type {
-            ConditionType::SeedingTime => {
-                if !item.active || !item.download_finished { return false; }
-                let ts = item.cached_at.as_ref()
-                    .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-                    .or_else(|| DateTime::parse_from_rfc3339(&item.updated_at).ok());
-                ts.map(|t| (now - t.timestamp()) as f64 / 3600.0)
-            }
-            ConditionType::SeedingRatio => {
-                if !item.active { return false; }
-                Some(item.ratio as f64)
-            }
-            ConditionType::StalledTime => {
-                let sl = item.download_state.to_lowercase();
-                if sl.contains("stalled") {
-                    DateTime::parse_from_rfc3339(&item.created_at).ok()
-                        .map(|t| (now - t.timestamp()) as f64 / 3600.0)
-                } else {
-                    let is_dl = sl == "downloading" || sl == "active" || sl.contains("downloading");
-                    let is_checking = sl == "checking";
-                    if !is_dl && !is_checking { return false; }
-                    let stalled = if is_checking {
-                        DateTime::parse_from_rfc3339(&item.updated_at).ok()
-                            .map(|t| now - t.timestamp() > 21600).unwrap_or(false)
-                    } else {
-                        item.download_speed < 1024 && item.upload_speed == 0
-                            && (item.seeds == 0 && item.peers == 0 || !item.active)
-                    };
-                    if !stalled { return false; }
-                    DateTime::parse_from_rfc3339(&item.updated_at).ok()
-                        .map(|t| (now - t.timestamp()) as f64 / 3600.0)
-                }
-            }
-            ConditionType::Seeds => Some(item.seeds as f64),
-            ConditionType::Peers => Some(item.peers as f64),
-            ConditionType::TotalUploaded => Some(item.total_uploaded as f64 / (1024.0 * 1024.0 * 1024.0)),
-            ConditionType::LongTermSeeding => return bool_match(item.long_term_seeding, condition.value),
-            ConditionType::SeedTorrent => return bool_match(item.seed_torrent, condition.value),
-            ConditionType::HasMagnet => return bool_match(item.magnet.is_some(), condition.value),
-            ConditionType::AllowZipped => return bool_match(item.allow_zipped, condition.value),
-            ConditionType::TorrentFile => return bool_match(item.torrent_file, condition.value),
-            // Shared fields
-            ConditionType::Age => DateTime::parse_from_rfc3339(&item.created_at).ok()
-                .map(|t| (now - t.timestamp()) as f64 / 3600.0),
-            ConditionType::DownloadSpeed => Some(item.download_speed as f64),
-            ConditionType::UploadSpeed => Some(item.upload_speed as f64),
-            ConditionType::FileSize => Some(item.size as f64 / (1024.0 * 1024.0 * 1024.0)),
-            ConditionType::Progress => Some(item.progress as f64),
-            ConditionType::TotalDownloaded => Some(item.total_downloaded as f64 / (1024.0 * 1024.0 * 1024.0)),
-            ConditionType::DownloadState => return match condition.value as i32 {
-                0 => item.download_state == "downloading",
-                1 => item.download_state == "uploading" || item.download_state == "uploading (no peers)",
-                2 => item.download_state == "stopped seeding" || item.download_state == "stopped",
-                3 => item.download_state == "cached",
-                _ => false,
-            },
-            ConditionType::Inactive => Some(if is_torrent_inactive(item, now) { 1.0 } else { 0.0 }),
-            ConditionType::DownloadFinished => return bool_match(item.download_finished, condition.value),
-            ConditionType::Cached => return bool_match(item.cached, condition.value),
-            ConditionType::Private => return bool_match(item.private, condition.value),
-            ConditionType::ETA => Some(item.eta as f64 / 3600.0),
-            ConditionType::Availability => Some(item.availability as f64),
-            ConditionType::ExpiresAt => item.expires_at.as_ref()
-                .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-                .map(|t| ((t.timestamp() - now) as f64 / 3600.0).max(0.0)),
-            ConditionType::DownloadPresent => return bool_match(item.download_present, condition.value),
-        };
-
-        compare(val.unwrap_or(0.0), &condition.operator, condition.value)
+    fn eval_webdl_conditions(&self, rule: &AutomationRule, item: &WebDownload) -> bool {
+        rule.conditions.iter().all(|c| eval_webdl(c, item))
     }
-
-    fn evaluate_webdl_conditions(&self, rule: &AutomationRule, item: &WebDownload) -> bool {
-        rule.conditions.iter().all(|c| self.evaluate_webdl_condition(c, item))
-    }
-
-    fn evaluate_webdl_condition(&self, condition: &Condition, item: &WebDownload) -> bool {
-        let now = now_secs();
-
-        let val: Option<f64> = match condition.r#type {
-            // Torrent-only conditions — skip for web downloads
-            ConditionType::SeedingTime | ConditionType::SeedingRatio
-            | ConditionType::StalledTime | ConditionType::Seeds | ConditionType::Peers
-            | ConditionType::TotalUploaded | ConditionType::LongTermSeeding
-            | ConditionType::SeedTorrent | ConditionType::HasMagnet
-            | ConditionType::AllowZipped | ConditionType::TorrentFile
-            | ConditionType::Cached | ConditionType::Private => return false,
-            // Shared
-            ConditionType::Age => DateTime::parse_from_rfc3339(&item.created_at).ok()
-                .map(|t| (now - t.timestamp()) as f64 / 3600.0),
-            ConditionType::DownloadSpeed => Some(item.download_speed as f64),
-            ConditionType::UploadSpeed => Some(item.upload_speed as f64),
-            ConditionType::FileSize => Some(item.size as f64 / (1024.0 * 1024.0 * 1024.0)),
-            ConditionType::Progress => Some(item.progress as f64),
-            ConditionType::TotalDownloaded => None,
-            ConditionType::DownloadState => return match condition.value as i32 {
-                0 => item.download_state == "downloading",
-                2 => item.download_state == "stopped",
-                3 => item.download_state == "cached",
-                _ => false,
-            },
-            ConditionType::Inactive => {
-                let sl = item.download_state.to_lowercase();
-                let inactive = sl == "failed" || sl.starts_with("failed") || sl == "error"
-                    || sl == "expired" || (!item.active && !item.download_finished
-                    && !sl.contains("cached") && !sl.contains("downloading"));
-                Some(if inactive { 1.0 } else { 0.0 })
-            }
-            ConditionType::DownloadFinished => return bool_match(item.download_finished, condition.value),
-            ConditionType::ETA => Some(item.eta as f64 / 3600.0),
-            ConditionType::Availability => Some(item.availability as f64),
-            ConditionType::ExpiresAt => item.expires_at.as_ref()
-                .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-                .map(|t| ((t.timestamp() - now) as f64 / 3600.0).max(0.0)),
-            ConditionType::DownloadPresent => return bool_match(item.download_present, condition.value),
-        };
-
-        compare(val.unwrap_or(0.0), &condition.operator, condition.value)
-    }
-
-    fn evaluate_usenet_conditions(&self, rule: &AutomationRule, item: &UsenetDownload) -> bool {
-        rule.conditions.iter().all(|c| self.evaluate_usenet_condition(c, item))
-    }
-
-    fn evaluate_usenet_condition(&self, condition: &Condition, item: &UsenetDownload) -> bool {
-        let now = now_secs();
-
-        let val: Option<f64> = match condition.r#type {
-            // Torrent-only conditions — skip for usenet
-            ConditionType::SeedingTime | ConditionType::SeedingRatio
-            | ConditionType::StalledTime | ConditionType::Seeds | ConditionType::Peers
-            | ConditionType::TotalUploaded | ConditionType::LongTermSeeding
-            | ConditionType::SeedTorrent | ConditionType::HasMagnet
-            | ConditionType::AllowZipped | ConditionType::TorrentFile
-            | ConditionType::Private | ConditionType::UploadSpeed => return false,
-            // Shared
-            ConditionType::Age => DateTime::parse_from_rfc3339(&item.created_at).ok()
-                .map(|t| (now - t.timestamp()) as f64 / 3600.0),
-            ConditionType::DownloadSpeed => Some(item.download_speed as f64),
-            ConditionType::FileSize => Some(item.size as f64 / (1024.0 * 1024.0 * 1024.0)),
-            ConditionType::Progress => Some(item.progress as f64),
-            ConditionType::TotalDownloaded => None,
-            ConditionType::DownloadState => return match condition.value as i32 {
-                0 => item.download_state == "downloading",
-                2 => item.download_state == "stopped",
-                3 => item.download_state == "cached",
-                _ => false,
-            },
-            ConditionType::Inactive => {
-                let sl = item.download_state.to_lowercase();
-                let inactive = sl == "failed" || sl.starts_with("failed") || sl == "error"
-                    || sl == "expired" || (!item.active && !item.download_finished
-                    && !sl.contains("cached") && !sl.contains("downloading"));
-                Some(if inactive { 1.0 } else { 0.0 })
-            }
-            ConditionType::DownloadFinished => return bool_match(item.download_finished, condition.value),
-            ConditionType::Cached => return bool_match(item.cached, condition.value),
-            ConditionType::ETA => Some(item.eta as f64 / 3600.0),
-            ConditionType::Availability => None,
-            ConditionType::ExpiresAt => item.expires_at.as_ref()
-                .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-                .map(|t| ((t.timestamp() - now) as f64 / 3600.0).max(0.0)),
-            ConditionType::DownloadPresent => return bool_match(item.download_present, condition.value),
-            ConditionType::UploadSpeed => None,
-        };
-
-        compare(val.unwrap_or(0.0), &condition.operator, condition.value)
+    fn eval_usenet_conditions(&self, rule: &AutomationRule, item: &UsenetDownload) -> bool {
+        rule.conditions.iter().all(|c| eval_usenet(c, item))
     }
 }
 
 // ── Action executors ──────────────────────────────────────────────────────────
 
-async fn execute_torrent_action(action: &ActionType, client: &TorboxClient, id: i32) -> Result<(), String> {
+async fn exec_torrent_action(action: &ActionType, client: &TorboxClient, id: i32) -> Result<(), String> {
     let op = match action {
-        ActionType::StopSeeding => "stop_seeding",
-        ActionType::Delete => "delete",
-        ActionType::Stop => "stop",
-        ActionType::Resume => "resume",
-        ActionType::Restart => "restart",
-        ActionType::Reannounce => "reannounce",
+        ActionType::StopSeeding => "stop_seeding", ActionType::Delete => "delete",
+        ActionType::Stop => "stop", ActionType::Resume => "resume",
+        ActionType::Restart => "restart", ActionType::Reannounce => "reannounce",
         ActionType::ForceStart => "start",
     };
-    client.control_torrent(op.to_string(), id, false).await
-        .map_err(|e| format!("Torrent action '{}' failed: {}", op, e))?;
-    Ok(())
+    client.control_torrent(op.to_string(), id, false).await.map(|_| ()).map_err(|e| format!("{}", e))
 }
 
-async fn execute_webdl_action(action: &ActionType, client: &TorboxClient, id: i32) -> Result<(), String> {
+async fn exec_webdl_action(action: &ActionType, client: &TorboxClient, id: i32) -> Result<(), String> {
     let op = match action {
-        ActionType::Delete => "delete",
-        ActionType::Stop => "stop",
-        ActionType::Resume => "resume",
-        ActionType::StopSeeding | ActionType::Restart
-        | ActionType::Reannounce | ActionType::ForceStart => {
-            return Err(format!("Action '{:?}' is not supported for web downloads", action));
-        }
+        ActionType::Delete => "delete", ActionType::Stop => "stop", ActionType::Resume => "resume",
+        _ => return Err(format!("Action {:?} not supported for web downloads", action)),
     };
-    client.control_web_download(op.to_string(), id, false).await
-        .map_err(|e| format!("Web download action '{}' failed: {}", op, e))?;
-    Ok(())
+    client.control_web_download(op.to_string(), id, false).await.map(|_| ()).map_err(|e| format!("{}", e))
 }
 
-async fn execute_usenet_action(action: &ActionType, client: &TorboxClient, id: i32) -> Result<(), String> {
+async fn exec_usenet_action(action: &ActionType, client: &TorboxClient, id: i32) -> Result<(), String> {
     let op = match action {
-        ActionType::Delete => "delete",
-        ActionType::Stop => "stop",
-        ActionType::Resume => "resume",
-        ActionType::StopSeeding | ActionType::Restart
-        | ActionType::Reannounce | ActionType::ForceStart => {
-            return Err(format!("Action '{:?}' is not supported for usenet downloads", action));
-        }
+        ActionType::Delete => "delete", ActionType::Stop => "stop", ActionType::Resume => "resume",
+        _ => return Err(format!("Action {:?} not supported for usenet downloads", action)),
     };
-    client.control_usenet_download(op.to_string(), id, false).await
-        .map_err(|e| format!("Usenet action '{}' failed: {}", op, e))?;
-    Ok(())
+    client.control_usenet_download(op.to_string(), id, false).await.map(|_| ()).map_err(|e| format!("{}", e))
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// ── Condition evaluators ──────────────────────────────────────────────────────
 
-fn now_secs() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64
+fn now_secs() -> i64 { SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64 }
+fn boolmatch(b: bool, v: f64) -> bool { ((if b { 1.0_f64 } else { 0.0 }) - v).abs() < 0.001 }
+fn cmp(lhs: f64, op: &Operator, rhs: f64) -> bool {
+    match op { Operator::GreaterThan => lhs > rhs, Operator::LessThan => lhs < rhs,
+               Operator::GreaterThanOrEqual => lhs >= rhs, Operator::LessThanOrEqual => lhs <= rhs,
+               Operator::Equal => (lhs - rhs).abs() < 0.001 }
 }
 
-fn bool_match(b: bool, value: f64) -> bool {
-    (if b { 1.0_f64 } else { 0.0_f64 } - value).abs() < 0.001
+fn eval_torrent(c: &Condition, t: &Torrent) -> bool {
+    let now = now_secs();
+    let val: Option<f64> = match c.r#type {
+        ConditionType::SeedingTime => {
+            if !t.active || !t.download_finished { return false; }
+            t.cached_at.as_ref().and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+                .or_else(|| DateTime::parse_from_rfc3339(&t.updated_at).ok())
+                .map(|d| (now - d.timestamp()) as f64 / 3600.0)
+        }
+        ConditionType::SeedingRatio => { if !t.active { return false; } Some(t.ratio as f64) }
+        ConditionType::StalledTime => {
+            let sl = t.download_state.to_lowercase();
+            if sl.contains("stalled") {
+                DateTime::parse_from_rfc3339(&t.created_at).ok().map(|d| (now - d.timestamp()) as f64 / 3600.0)
+            } else {
+                let is_dl = sl == "downloading" || sl == "active" || sl.contains("downloading");
+                let is_chk = sl == "checking";
+                if !is_dl && !is_chk { return false; }
+                let stalled = if is_chk { DateTime::parse_from_rfc3339(&t.updated_at).ok().map(|d| now - d.timestamp() > 21600).unwrap_or(false) }
+                              else { t.download_speed < 1024 && t.upload_speed == 0 && (t.seeds == 0 && t.peers == 0 || !t.active) };
+                if !stalled { return false; }
+                DateTime::parse_from_rfc3339(&t.updated_at).ok().map(|d| (now - d.timestamp()) as f64 / 3600.0)
+            }
+        }
+        ConditionType::Seeds => Some(t.seeds as f64),
+        ConditionType::Peers => Some(t.peers as f64),
+        ConditionType::TotalUploaded => Some(t.total_uploaded as f64 / (1024.0*1024.0*1024.0)),
+        ConditionType::LongTermSeeding => return boolmatch(t.long_term_seeding, c.value),
+        ConditionType::SeedTorrent => return boolmatch(t.seed_torrent, c.value),
+        ConditionType::HasMagnet => return boolmatch(t.magnet.is_some(), c.value),
+        ConditionType::AllowZipped => return boolmatch(t.allow_zipped, c.value),
+        ConditionType::TorrentFile => return boolmatch(t.torrent_file, c.value),
+        ConditionType::Age => DateTime::parse_from_rfc3339(&t.created_at).ok().map(|d| (now - d.timestamp()) as f64 / 3600.0),
+        ConditionType::DownloadSpeed => Some(t.download_speed as f64),
+        ConditionType::UploadSpeed => Some(t.upload_speed as f64),
+        ConditionType::FileSize => Some(t.size as f64 / (1024.0*1024.0*1024.0)),
+        ConditionType::Progress => Some(t.progress as f64),
+        ConditionType::TotalDownloaded => Some(t.total_downloaded as f64 / (1024.0*1024.0*1024.0)),
+        ConditionType::DownloadState => return match c.value as i32 {
+            0 => t.download_state == "downloading", 1 => t.download_state == "uploading" || t.download_state == "uploading (no peers)",
+            2 => t.download_state == "stopped seeding" || t.download_state == "stopped", 3 => t.download_state == "cached", _ => false,
+        },
+        ConditionType::Inactive => {
+            let sl = t.download_state.to_lowercase();
+            let inactive = sl == "reported missing" || sl == "missingfiles" || sl == "failed" || sl == "error" || sl.starts_with("failed")
+                || t.expires_at.as_ref().and_then(|s| DateTime::parse_from_rfc3339(s).ok()).map(|d| d.timestamp() < now).unwrap_or(false)
+                || sl == "expired" || (!t.active && !sl.contains("cached") && !sl.contains("completed") && !sl.contains("uploading") && !sl.contains("seeding") && !sl.contains("stalled"))
+                || sl == "stopped seeding" || sl == "stopped";
+            Some(if inactive { 1.0 } else { 0.0 })
+        }
+        ConditionType::DownloadFinished => return boolmatch(t.download_finished, c.value),
+        ConditionType::Cached => return boolmatch(t.cached, c.value),
+        ConditionType::Private => return boolmatch(t.private, c.value),
+        ConditionType::ETA => Some(t.eta as f64 / 3600.0),
+        ConditionType::Availability => Some(t.availability as f64),
+        ConditionType::ExpiresAt => t.expires_at.as_ref().and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+            .map(|d| ((d.timestamp() - now) as f64 / 3600.0).max(0.0)),
+        ConditionType::DownloadPresent => return boolmatch(t.download_present, c.value),
+    };
+    cmp(val.unwrap_or(0.0), &c.operator, c.value)
 }
 
-fn compare(lhs: f64, op: &Operator, rhs: f64) -> bool {
-    match op {
-        Operator::GreaterThan => lhs > rhs,
-        Operator::LessThan => lhs < rhs,
-        Operator::GreaterThanOrEqual => lhs >= rhs,
-        Operator::LessThanOrEqual => lhs <= rhs,
-        Operator::Equal => (lhs - rhs).abs() < 0.001,
-    }
+fn eval_webdl(c: &Condition, w: &WebDownload) -> bool {
+    let now = now_secs();
+    let val: Option<f64> = match c.r#type {
+        ConditionType::SeedingTime | ConditionType::SeedingRatio | ConditionType::StalledTime
+        | ConditionType::Seeds | ConditionType::Peers | ConditionType::TotalUploaded
+        | ConditionType::LongTermSeeding | ConditionType::SeedTorrent | ConditionType::HasMagnet
+        | ConditionType::AllowZipped | ConditionType::TorrentFile | ConditionType::Cached
+        | ConditionType::Private => return false,
+        ConditionType::Age => DateTime::parse_from_rfc3339(&w.created_at).ok().map(|d| (now - d.timestamp()) as f64 / 3600.0),
+        ConditionType::DownloadSpeed => Some(w.download_speed as f64),
+        ConditionType::UploadSpeed => Some(w.upload_speed as f64),
+        ConditionType::FileSize => Some(w.size as f64 / (1024.0*1024.0*1024.0)),
+        ConditionType::Progress => Some(w.progress as f64),
+        ConditionType::TotalDownloaded => None,
+        ConditionType::DownloadState => return match c.value as i32 { 0 => w.download_state == "downloading", 2 => w.download_state == "stopped", 3 => w.download_state == "cached", _ => false },
+        ConditionType::Inactive => { let sl = w.download_state.to_lowercase(); Some(if sl == "failed" || sl.starts_with("failed") || sl == "error" || sl == "expired" || (!w.active && !w.download_finished && !sl.contains("cached") && !sl.contains("downloading")) { 1.0 } else { 0.0 }) }
+        ConditionType::DownloadFinished => return boolmatch(w.download_finished, c.value),
+        ConditionType::ETA => Some(w.eta as f64 / 3600.0),
+        ConditionType::Availability => Some(w.availability as f64),
+        ConditionType::ExpiresAt => w.expires_at.as_ref().and_then(|s| DateTime::parse_from_rfc3339(s).ok()).map(|d| ((d.timestamp()-now) as f64/3600.0).max(0.0)),
+        ConditionType::DownloadPresent => return boolmatch(w.download_present, c.value),
+    };
+    cmp(val.unwrap_or(0.0), &c.operator, c.value)
 }
 
-fn is_torrent_inactive(item: &crate::api::types::Torrent, now: i64) -> bool {
-    let sl = item.download_state.to_lowercase();
-    if matches!(sl.as_str(), "reported missing" | "missingfiles" | "failed" | "error") || sl.starts_with("failed") {
-        return true;
-    }
-    if item.download_finished { return false; }
-    let is_expired = item.expires_at.as_ref()
-        .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-        .map(|t| t.timestamp() < now)
-        .unwrap_or(false);
-    if is_expired || sl == "expired" { return true; }
-    if !item.active && !sl.contains("cached") && !sl.contains("completed")
-        && !sl.contains("uploading") && !sl.contains("seeding")
-        && !sl.contains("stalled") { return true; }
-    matches!(sl.as_str(), "stopped seeding" | "stopped" | "error" | "failed")
+fn eval_usenet(c: &Condition, u: &UsenetDownload) -> bool {
+    let now = now_secs();
+    let val: Option<f64> = match c.r#type {
+        ConditionType::SeedingTime | ConditionType::SeedingRatio | ConditionType::StalledTime
+        | ConditionType::Seeds | ConditionType::Peers | ConditionType::TotalUploaded
+        | ConditionType::LongTermSeeding | ConditionType::SeedTorrent | ConditionType::HasMagnet
+        | ConditionType::AllowZipped | ConditionType::TorrentFile | ConditionType::Private
+        | ConditionType::UploadSpeed => return false,
+        ConditionType::Age => DateTime::parse_from_rfc3339(&u.created_at).ok().map(|d| (now - d.timestamp()) as f64 / 3600.0),
+        ConditionType::DownloadSpeed => Some(u.download_speed as f64),
+        ConditionType::FileSize => Some(u.size as f64 / (1024.0*1024.0*1024.0)),
+        ConditionType::Progress => Some(u.progress as f64),
+        ConditionType::TotalDownloaded => None,
+        ConditionType::DownloadState => return match c.value as i32 { 0 => u.download_state == "downloading", 2 => u.download_state == "stopped", 3 => u.download_state == "cached", _ => false },
+        ConditionType::Inactive => { let sl = u.download_state.to_lowercase(); Some(if sl == "failed" || sl.starts_with("failed") || sl == "error" || sl == "expired" || (!u.active && !u.download_finished && !sl.contains("cached") && !sl.contains("downloading")) { 1.0 } else { 0.0 }) }
+        ConditionType::DownloadFinished => return boolmatch(u.download_finished, c.value),
+        ConditionType::Cached => return boolmatch(u.cached, c.value),
+        ConditionType::ETA => Some(u.eta as f64 / 3600.0),
+        ConditionType::Availability => None,
+        ConditionType::ExpiresAt => u.expires_at.as_ref().and_then(|s| DateTime::parse_from_rfc3339(s).ok()).map(|d| ((d.timestamp()-now) as f64/3600.0).max(0.0)),
+        ConditionType::DownloadPresent => return boolmatch(u.download_present, c.value),
+    };
+    cmp(val.unwrap_or(0.0), &c.operator, c.value)
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -588,8 +308,4 @@ pub struct ExecutionResult {
     pub partial: bool,
 }
 
-impl Default for AutomationEngine {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+impl Default for AutomationEngine { fn default() -> Self { Self::new() } }
