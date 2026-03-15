@@ -375,7 +375,7 @@ pub fn UsersTab() -> impl IntoView {
                                 </div>
 
                                 // Progress bar
-                                <Show when=move || monthly_downloaded.get() > 0i64>
+                                <Show when=move || monthly_downloaded.get() != 0i64>
                                     <div>
                                         <div class="flex justify-between text-xs mb-1" style="color: var(--text-secondary);">
                                             <span>{move || format!("{:.1}% of minimum threshold used", usage_percent())}</span>
