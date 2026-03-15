@@ -1094,9 +1094,9 @@ pub fn DownloadsTable(
                                 let mut all_downloads = Vec::new();
                                 let mut api_errors = Vec::new();
                                 
-                                let torrents_future = client.get_torrent_list(None, Some(false), None, None);
-                                let web_downloads_future = client.get_web_download_list(None, Some(false), None, None);
-                                let usenet_future = client.get_usenet_download_list(None, Some(false), None, None);
+                                let torrents_future = client.get_torrent_list(None, Some(true), None, Some(9999));
+                                let web_downloads_future = client.get_web_download_list(None, Some(true), None, Some(9999));
+                                let usenet_future = client.get_usenet_download_list(None, Some(true), None, Some(9999));
 
                                 let queued_torrents_future = client.get_queued_downloads(Some("torrent".to_string()), None, Some(false), None, None);
                                 let queued_usenet_future = client.get_queued_downloads(Some("usenet".to_string()), None, Some(false), None, None);
@@ -1383,7 +1383,7 @@ pub fn DownloadsTable(
                     });
                     let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(
                         closure.as_ref().unchecked_ref(),
-                        10000,
+                        3000,
                     );
                     closure.forget();
                 }
@@ -1398,9 +1398,9 @@ pub fn DownloadsTable(
                                 let api_key_clone = api_key.clone();
                                 let client = TorboxClient::new(api_key_clone);
                                 
-                                let torrents_future = client.get_torrent_list(None, Some(false), None, None);
-                                let web_downloads_future = client.get_web_download_list(None, Some(false), None, None);
-                                let usenet_future = client.get_usenet_download_list(None, Some(false), None, None);
+                                let torrents_future = client.get_torrent_list(None, Some(true), None, Some(9999));
+                                let web_downloads_future = client.get_web_download_list(None, Some(true), None, Some(9999));
+                                let usenet_future = client.get_usenet_download_list(None, Some(true), None, Some(9999));
 
                                 let queued_torrents_future = client.get_queued_downloads(Some("torrent".to_string()), None, Some(false), None, None);
                                 let queued_usenet_future = client.get_queued_downloads(Some("usenet".to_string()), None, Some(false), None, None);
@@ -1568,7 +1568,7 @@ pub fn DownloadsTable(
                     }
                 }
                 
-                let poll_interval = 10000;
+                let poll_interval = 5000;
                 
                 let promise = Promise::new(&mut |resolve, _| {
                     if let Some(window) = web_sys::window() {
