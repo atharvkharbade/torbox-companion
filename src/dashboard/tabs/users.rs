@@ -123,7 +123,7 @@ pub fn UsersTab() -> impl IntoView {
                             let mut total_bytes: i64 = 0;
 
                             // Fetch torrents
-                            if let Ok(resp) = client.get_torrent_list(None, Some(true), None, None).await {
+                            if let Ok(resp) = client.get_torrent_list(None, Some(true), None, Some(9999)).await {
                                 if let Some(torrents) = resp.data {
                                     for t in &torrents {
                                         if let Ok(created) = chrono::DateTime::parse_from_rfc3339(&t.created_at) {
@@ -136,7 +136,7 @@ pub fn UsersTab() -> impl IntoView {
                             }
 
                             // Fetch web downloads
-                            if let Ok(resp) = client.get_web_download_list(None, Some(true), None, None).await {
+                            if let Ok(resp) = client.get_web_download_list(None, Some(true), None, Some(9999)).await {
                                 if let Some(webdls) = resp.data {
                                     for w in &webdls {
                                         if let Ok(created) = chrono::DateTime::parse_from_rfc3339(&w.created_at) {
@@ -149,7 +149,7 @@ pub fn UsersTab() -> impl IntoView {
                             }
 
                             // Fetch usenet downloads
-                            if let Ok(resp) = client.get_usenet_download_list(None, Some(true), None, None).await {
+                            if let Ok(resp) = client.get_usenet_download_list(None, Some(true), None, Some(9999)).await {
                                 if let Some(usnets) = resp.data {
                                     for u in &usnets {
                                         if let Ok(created) = chrono::DateTime::parse_from_rfc3339(&u.created_at) {
