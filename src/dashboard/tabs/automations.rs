@@ -66,6 +66,7 @@ struct CreateRuleRequest {
     trigger_config: serde_json::Value,
     conditions: Vec<serde_json::Value>,
     action_config: serde_json::Value,
+    download_category: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -396,6 +397,7 @@ pub fn AutomationsTab() -> impl IntoView {
                                     trigger_config,
                                     conditions,
                                     action_config,
+                                    download_category: "Torrent".to_string(),
                                 };
 
                                 let url = "/api/automation/rules";
@@ -1286,6 +1288,7 @@ fn RuleModal(
     let condition_operator = RwSignal::new("GreaterThan".to_string());
     let condition_value = RwSignal::new(24.0f64);
     let action_type = RwSignal::new("StopSeeding".to_string());
+    let download_category = RwSignal::new("Torrent".to_string());
     let saving = RwSignal::new(false);
     let save_error = RwSignal::new(None::<String>);
 
@@ -1327,6 +1330,12 @@ fn RuleModal(
                             action_type.set(at.to_string());
                         }
                     }
+                    // Load download_category from rule
+                    if let Ok(cat) = serde_json::from_value::<String>(rule.download_category.clone()) {
+                        download_category.set(cat);
+                    } else {
+                        download_category.set("Torrent".to_string());
+                    }
                 }
             } else if let Some((name, minutes, cond_type, cond_op, cond_val, act_type)) = preset_data.get() {
                 // Apply preset values
@@ -1338,6 +1347,7 @@ fn RuleModal(
                 condition_operator.set(cond_op);
                 condition_value.set(cond_val);
                 action_type.set(act_type);
+                download_category.set("Torrent".to_string());
                 preset_data.set(None); // Clear preset after applying
             } else {
                 rule_name.set(String::new());
@@ -1349,6 +1359,7 @@ fn RuleModal(
                 condition_operator.set("GreaterThan".to_string());
                 condition_value.set(24.0);
                 action_type.set("StopSeeding".to_string());
+                download_category.set("Torrent".to_string());
             }
             save_error.set(None);
         }
@@ -1365,6 +1376,7 @@ fn RuleModal(
     let condition_operator_save = condition_operator.clone();
     let condition_value_save = condition_value.clone();
     let action_type_save = action_type.clone();
+    let download_category_save = download_category.clone();
     let editing_rule_id_save = editing_rule_id.clone();
     let saving_save = saving.clone();
     let save_error_save = save_error.clone();
@@ -1464,6 +1476,26 @@ fn RuleModal(
                                         <label for="rule-enabled" class="ml-3.5 text-sm font-medium cursor-pointer" style="color: var(--text-primary); line-height: 1.5;">
                                             "Enable this rule"
                                         </label>
+                                    </div>
+
+                                    <div style="margin-top: 1.5rem;">
+                                        <label class="block text-sm font-semibold mb-3" style="color: var(--text-primary); line-height: 1.5;">
+                                            "Download Type"
+                                        </label>
+                                        <select
+                                            class="w-full px-4 py-3 rounded-lg border transition-all"
+                                            style="background-color: var(--bg-tertiary); border-color: var(--border-secondary); color: var(--text-primary); font-size: 0.9375rem;"
+                                            prop:value=move || download_category.get()
+                                            on:change=move |ev| download_category.set(event_target_value(&ev))
+                                            disabled=move || saving.get()
+                                        >
+                                            <option value="Torrent">"Torrent"</option>
+                                            <option value="WebDownload">"Web Download"</option>
+                                            <option value="Usenet">"Usenet"</option>
+                                        </select>
+                                        <p class="text-xs mt-2.5" style="color: var(--text-secondary); line-height: 1.6;">
+                                            "Choose which download type this rule applies to. Torrent-specific conditions (seeding, ratio, etc.) are only available for Torrents."
+                                        </p>
                                     </div>
                                 </div>
                             </div>
@@ -1890,6 +1922,7 @@ fn RuleModal(
                                                                 trigger_config,
                                                                 conditions,
                                                                 action_config,
+                                                                download_category: download_category_save.get(),
                                                             };
 
                                                             let url = if editing_rule_id_clone.get().is_some() {
