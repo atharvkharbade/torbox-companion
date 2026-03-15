@@ -60,7 +60,6 @@ jobs:
     permissions:
       contents: read
       packages: write
-      id-token: write
     strategy:
       fail-fast: false
       matrix:
@@ -127,14 +126,10 @@ jobs:
         run: |
           PLATFORM_SLUG=$(echo "${{ matrix.platform }}" | tr '/' '-')
           DIGEST_FILE="${PLATFORM_SLUG}.digest"
-          # Get the first tag (tags are newline-separated)
           FIRST_TAG=$(echo "${{ needs.prepare.outputs.tags }}" | head -n1 | tr -d ' ')
           echo "Inspecting tag: $FIRST_TAG"
-          # Extract digest from the pushed image using imagetools
-          # For single-platform images, we get the manifest digest directly
           DIGEST=$(docker buildx imagetools inspect "$FIRST_TAG" 2>&1 | grep -oE 'sha256:[a-f0-9]{64}' | head -n1 || echo "")
           if [ -z "$DIGEST" ]; then
-            # Alternative: use manifest inspect JSON output
             DIGEST=$(docker manifest inspect "$FIRST_TAG" 2>/dev/null | jq -r 'if .config then .config.digest else .digest end' || echo "")
           fi
           if [ -z "$DIGEST" ]; then
@@ -143,7 +138,6 @@ jobs:
           fi
           echo "$DIGEST" > ${DIGEST_FILE}
           echo "DIGEST_FILE=${DIGEST_FILE}" >> $GITHUB_ENV
-          echo "IMAGE_DIGEST=$DIGEST" >> $GITHUB_ENV
           echo "Extracted digest: $DIGEST"
 
       - name: Upload digest artifact
@@ -159,7 +153,6 @@ jobs:
     permissions:
       contents: read
       packages: write
-      id-token: write
     if: needs.build.result == 'success'
     steps:
       - name: Checkout repository
@@ -205,23 +198,3 @@ jobs:
                 ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${ARM64_DIGEST}
             fi
           done
-
-      - name: Read manifest digest
-        id: manifest_digest
-        run: |
-          FIRST_TAG=$(echo "${{ needs.prepare.outputs.tags }}" | head -n1 | tr -d ' ')
-          echo "Inspecting manifest list: $FIRST_TAG"
-          MANIFEST_DIGEST=$(docker buildx imagetools inspect "$FIRST_TAG" --format '{{json .}}' | jq -r '.manifest.digest // .digest // empty' || echo "")
-          if [ -z "$MANIFEST_DIGEST" ]; then
-            echo "Error: Could not extract manifest digest from $FIRST_TAG"
-            exit 1
-          fi
-          echo "MANIFEST_DIGEST=${MANIFEST_DIGEST}" >> $GITHUB_OUTPUT
-          echo "Manifest digest: ${MANIFEST_DIGEST}"
-
-      - name: Generate artifact attestation
-        uses: actions/attest-build-provenance@v1
-        with:
-          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          subject-digest: ${{ steps.manifest_digest.outputs.MANIFEST_DIGEST }}
-          push-to-registry: true
